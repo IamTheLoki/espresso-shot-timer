@@ -2,6 +2,8 @@
 
 An ESPHome-based timer for perfect espresso extraction with the Waveshare ESP32-S3 1.8" AMOLED Touch Display.
 
+Discussion and questions: [Home Assistant Community thread](https://community.home-assistant.io/t/espresso-shot-timer-for-the-rocket-appartamento-esphome-lvgl-waveshare-1-8-amoled/1026888)
+
 ![Preview of the weather view and the timer view](docs/preview.png)
 
 *Preview (simulation) of the weather view (left) and the timer view while an extraction is running (right).*
