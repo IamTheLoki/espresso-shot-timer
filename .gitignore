@@ -1,0 +1,39 @@
+# ESPHome Build-Verzeichnisse
+.esphome/
+.pioenvs/
+.piolibdeps/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Thumbnails
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Backup-Dateien
+*.backup
+*.bak
+*.old
+
+# Log-Dateien
+*.log
+
+# ESPHome secrets (use secrets.yaml.example as template)
+secrets.yaml

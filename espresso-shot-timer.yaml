@@ -1,0 +1,966 @@
+###################################################################
+# Espresso Shot Timer for Rocket Appartamento                     #
+# Hardware: Waveshare ESP32-S3 1.8" AMOLED Touch Display          #
+# Author: IamTheLoki (https://github.com/IamTheLoki)              #
+#                                             Version: 2026.09.30 #
+###################################################################
+
+substitutions:
+  name: espresso-shot-timer
+  friendly_name: "Espresso Shot Timer"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  min_version: 2024.6.0
+  platformio_options:
+    board_build.flash_mode: dio
+  on_boot:
+    priority: -100
+    then:
+      - delay: 2s
+      - script.execute: init_display
+
+esp32:
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240: "y"
+      CONFIG_ESP32S3_DATA_CACHE_64KB: "y"
+      CONFIG_ESP32S3_DATA_CACHE_LINE_64B: "y"
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${friendly_name} Hotspot"
+    password: !secret ap_password
+
+captive_portal:
+
+# I2C Bus for Touch Controller
+i2c:
+  id: i2c_bus
+  sda: GPIO15
+  scl: GPIO14
+  frequency: 100kHz
+  scan: true
+
+# Quad SPI Bus for AMOLED Display
+spi:
+  - id: quad_spi
+    type: quad
+    clk_pin: GPIO11
+    data_pins:
+      - GPIO4   # D0
+      - GPIO5   # D1
+      - GPIO6   # D2
+      - GPIO7   # D3
+
+# AMOLED Display (390x450 with offset)
+display:
+  - platform: mipi_spi
+    id: amoled_display
+    brightness: 200
+    bus_mode: quad
+    dimensions:
+      width: 390
+      height: 450
+      offset_width: 11
+      offset_height: 1
+    model: WAVESHARE-ESP32-S3-TOUCH-AMOLED-1.75
+    cs_pin: GPIO12
+    auto_clear_enabled: false
+
+# Display brightness as output
+output:
+  - platform: template
+    id: backlight_output
+    type: float
+    write_action:
+      - lambda: |-
+          id(amoled_display).set_brightness(state * 255);
+
+# Display as Light (for Auto-Off)
+light:
+  - platform: monochromatic
+    id: display_backlight
+    name: "Display"
+    output: backlight_output
+    restore_mode: RESTORE_DEFAULT_ON
+    default_transition_length: 250ms
+    on_turn_on:
+      then:
+        - lambda: |-
+            // Track display wakeup time only if it was off
+            if (!id(display_is_on)) {
+              id(display_wakeup_time) = millis();
+              id(display_is_on) = true;
+            }
+            // Start the auto-off countdown (checked by the 1s interval below)
+            id(last_activity_time) = millis();
+    on_turn_off:
+      then:
+        - lambda: |-
+            id(display_is_on) = false;
+
+# Configurable Parameters
+number:
+  # Display Brightness
+  - platform: template
+    id: display_brightness
+    name: "Display Brightness"
+    icon: "mdi:brightness-6"
+    optimistic: true
+    restore_value: true
+    min_value: 50
+    max_value: 255
+    step: 5
+    initial_value: 200
+    unit_of_measurement: ""
+    mode: slider
+    entity_category: config
+    on_value:
+      - lambda: |-
+          id(amoled_display).set_brightness(x);
+  
+  # Display Auto-Off
+  - platform: template
+    id: display_timeout
+    name: "Display Auto-Off"
+    icon: "mdi:television-off"
+    optimistic: true
+    restore_value: true
+    min_value: 0
+    max_value: 300
+    step: 5
+    initial_value: 60
+    unit_of_measurement: "s"
+    mode: box
+    entity_category: config
+  
+  # Perfect Shot Time (Green)
+  - platform: template
+    id: perfect_shot_time
+    name: "Perfect Shot Time"
+    icon: "mdi:coffee"
+    optimistic: true
+    restore_value: true
+    min_value: 15
+    max_value: 40
+    step: 1
+    initial_value: 24
+    unit_of_measurement: "s"
+    mode: box
+    entity_category: config
+  
+  # Maximum Shot Time (Red)
+  - platform: template
+    id: max_shot_time
+    name: "Maximum Shot Time"
+    icon: "mdi:timer-alert"
+    optimistic: true
+    restore_value: true
+    min_value: 25
+    max_value: 60
+    step: 1
+    initial_value: 35
+    unit_of_measurement: "s"
+    mode: box
+    entity_category: config
+  
+  # Weather Update Interval
+  - platform: template
+    id: weather_update_interval
+    name: "Weather Update Interval"
+    icon: "mdi:weather-partly-cloudy"
+    optimistic: true
+    restore_value: true
+    min_value: 1
+    max_value: 60
+    step: 1
+    initial_value: 5
+    unit_of_measurement: "min"
+    mode: box
+    entity_category: config
+  
+  # Weather View Background Opacity
+  - platform: template
+    id: weather_bg_opacity
+    name: "Weather View Background Opacity"
+    icon: "mdi:opacity"
+    optimistic: true
+    restore_value: true
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: 60
+    unit_of_measurement: "%"
+    mode: slider
+    entity_category: config
+    on_value:
+      - lambda: |-
+          // Update weather container opacity
+          uint8_t opacity = (uint8_t)(x * 2.55); // Convert 0-100% to 0-255
+          lv_obj_set_style_bg_opa(weather_container, opacity, LV_PART_MAIN);
+  
+  # Timer View Background Opacity
+  - platform: template
+    id: timer_bg_opacity
+    name: "Timer View Background Opacity"
+    icon: "mdi:opacity"
+    optimistic: true
+    restore_value: true
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: 70
+    unit_of_measurement: "%"
+    mode: slider
+    entity_category: config
+    on_value:
+      - lambda: |-
+          // Update timer container opacity
+          uint8_t opacity = (uint8_t)(x * 2.55); // Convert 0-100% to 0-255
+          lv_obj_set_style_bg_opa(timer_container, opacity, LV_PART_MAIN);
+
+# CST816S Capacitive Touchscreen
+touchscreen:
+  - platform: cst816
+    id: touch_screen
+    display: amoled_display
+    interrupt_pin: GPIO21
+    reset_pin: GPIO16
+    on_touch:
+      - lambda: |-
+          ESP_LOGI("touch", "x=%d, y=%d", (int)touch.x, (int)touch.y);
+
+# Home Assistant Sensors for Weather
+sensor:
+  - platform: homeassistant
+    id: outdoor_temperature
+    name: "Outdoor Temperature"
+    entity_id: sensor.openweathermap_temperature
+    internal: false
+    device_class: temperature
+    state_class: measurement
+    unit_of_measurement: "°C"
+    accuracy_decimals: 1
+    on_value:
+      then:
+        - logger.log:
+            format: "Weather Update: Temperature received: %.1f°C"
+            args: ['x']
+            level: INFO
+        - script.execute: update_weather
+  
+  - platform: homeassistant
+    id: outdoor_humidity
+    name: "Outdoor Humidity"
+    entity_id: sensor.openweathermap_humidity
+    internal: false
+    device_class: humidity
+    state_class: measurement
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    on_value:
+      then:
+        - logger.log:
+            format: "Weather Update: Humidity received: %.0f%%"
+            args: ['x']
+            level: INFO
+  
+  # Config Sensors (Read-only copies of the number entities)
+  - platform: template
+    id: display_brightness_sensor
+    name: "Display Brightness"
+    icon: "mdi:brightness-6"
+    unit_of_measurement: ""
+    accuracy_decimals: 0
+    state_class: measurement
+    lambda: 'return id(display_brightness).state;'
+    update_interval: 5s
+  
+  - platform: template
+    id: display_timeout_sensor
+    name: "Display Auto-Off"
+    icon: "mdi:television-off"
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    state_class: measurement
+    lambda: 'return id(display_timeout).state;'
+    update_interval: 5s
+  
+  # Live countdown until the display turns off automatically.
+  # - display off:                      0
+  # - auto-off disabled / timer running: unknown (NaN), no countdown active
+  - platform: template
+    id: display_off_in
+    name: "Display Off In"
+    icon: "mdi:timer-sand"
+    unit_of_measurement: "s"
+    device_class: duration
+    accuracy_decimals: 0
+    state_class: measurement
+    entity_category: diagnostic
+    update_interval: 1s
+    lambda: |-
+      if (!id(display_is_on)) { return 0.0f; }
+      float timeout_s = id(display_timeout).state;
+      if (isnan(timeout_s) || timeout_s <= 0) { return NAN; }
+      if (id(timer_running) && !id(timer_paused)) { return NAN; }
+      long remaining = (long)timeout_s - (long)((millis() - id(last_activity_time)) / 1000UL);
+      return remaining > 0 ? (float)remaining : 0.0f;
+  
+  - platform: template
+    id: perfect_shot_time_sensor
+    name: "Perfect Shot Time"
+    icon: "mdi:coffee"
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    state_class: measurement
+    lambda: 'return id(perfect_shot_time).state;'
+    update_interval: 5s
+  
+  - platform: template
+    id: max_shot_time_sensor
+    name: "Maximum Shot Time"
+    icon: "mdi:timer-alert"
+    unit_of_measurement: "s"
+    accuracy_decimals: 0
+    state_class: measurement
+    lambda: 'return id(max_shot_time).state;'
+    update_interval: 5s
+  
+  - platform: template
+    id: weather_update_interval_sensor
+    name: "Weather Update Interval"
+    icon: "mdi:weather-partly-cloudy"
+    unit_of_measurement: "min"
+    accuracy_decimals: 1
+    state_class: measurement
+    lambda: 'return id(weather_update_interval).state;'
+    update_interval: 5s
+  
+  - platform: template
+    id: weather_bg_opacity_sensor
+    name: "Weather View Background Opacity"
+    icon: "mdi:opacity"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    state_class: measurement
+    lambda: 'return id(weather_bg_opacity).state;'
+    update_interval: 5s
+  
+  - platform: template
+    id: timer_bg_opacity_sensor
+    name: "Timer View Background Opacity"
+    icon: "mdi:opacity"
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    state_class: measurement
+    lambda: 'return id(timer_bg_opacity).state;'
+    update_interval: 5s
+  
+  # Duration of the last shot (published when the timer is stopped or reset)
+  - platform: template
+    id: last_shot_time
+    name: "Last Shot Time"
+    icon: "mdi:coffee"
+    unit_of_measurement: "s"
+    device_class: duration
+    accuracy_decimals: 1
+    state_class: measurement
+
+text_sensor:
+  - platform: homeassistant
+    id: weather_condition
+    name: "Weather Condition"
+    entity_id: sensor.openweathermap_condition
+    internal: false
+    icon: "mdi:weather-partly-cloudy"
+    on_value:
+      then:
+        - logger.log:
+            format: "Weather Update: Condition received: %s"
+            args: ['x.c_str()']
+            level: INFO
+
+# Timer Globals
+globals:
+  - id: timer_running
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  
+  - id: timer_seconds
+    type: float
+    restore_value: no
+    initial_value: '0.0'
+  
+  - id: timer_paused
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  
+  - id: timer_start_time
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+  
+  # Drift-free timing: elapsed = timer_accum_ms + (millis() - timer_segment_start)
+  # timer_accum_ms holds the time of all finished run segments (before pauses)
+  - id: timer_accum_ms
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+  
+  # millis() at timer start or last resume
+  - id: timer_segment_start
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+  
+  - id: display_wakeup_time
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+  
+  - id: display_is_on
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+  
+  - id: weather_last_update
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+  
+  # Last user activity (touch, wakeup, running timer) for display auto-off
+  - id: last_activity_time
+    type: unsigned long
+    restore_value: no
+    initial_value: '0'
+
+# Timer Interval
+interval:
+  - interval: 100ms
+    then:
+      - lambda: |-
+          if (id(timer_running) && !id(timer_paused)) {
+            // Derive time from the system clock instead of summing ticks (no drift)
+            unsigned long elapsed_ms = id(timer_accum_ms) + (millis() - id(timer_segment_start));
+            id(timer_seconds) = elapsed_ms / 1000.0f;
+            id(update_timer_display).execute();
+            // Display stays on while timer is running
+            id(last_activity_time) = millis();
+            if (!id(display_is_on)) {
+              auto call = id(display_backlight).turn_on();
+              call.perform();
+            }
+          }
+  
+  # Display auto-off: turn off after the configured time without activity.
+  # Activity = touch, display wakeup or running timer (see last_activity_time).
+  # The timeout is read live, so changes in Home Assistant apply immediately.
+  - interval: 1s
+    then:
+      - lambda: |-
+          float timeout_s = id(display_timeout).state;
+          if (timeout_s <= 0 || !id(display_is_on)) {
+            return;
+          }
+          // Never turn off while the timer is actively counting
+          if (id(timer_running) && !id(timer_paused)) {
+            id(last_activity_time) = millis();
+            return;
+          }
+          if (millis() - id(last_activity_time) >= (unsigned long)(timeout_s * 1000.0f)) {
+            auto call = id(display_backlight).turn_off();
+            call.set_transition_length(2000);
+            call.perform();
+          }
+  
+  # Weather update interval (checks every minute if update is needed)
+  - interval: 60s
+    then:
+      - lambda: |-
+          unsigned long current_time = millis() / 1000; // Seconds since start
+          unsigned long interval_seconds = id(weather_update_interval).state * 60; // Minutes to seconds
+          
+          if (current_time - id(weather_last_update) >= interval_seconds) {
+            id(weather_last_update) = current_time;
+            id(update_weather).execute();
+          }
+
+# Background Image
+image:
+  - platform: file
+    file: espresso_bg.jpg
+    id: espresso_bg
+    resize: 410x470
+    type: RGB565
+
+# LVGL UI
+lvgl:
+  log_level: WARN
+  color_depth: 16
+  
+  # Main page with 2 modes: Weather or Timer
+  pages:
+    - id: main_page
+      widgets:
+        # Background image
+        - image:
+            id: bg_image
+            src: espresso_bg
+            align: CENTER
+        # ============================================
+        # WEATHER DISPLAY (when timer is not running)
+        # ============================================
+        - obj:
+            id: weather_container
+            x: 0
+            y: 0
+            width: 390
+            height: 450
+            bg_color: 0x000000
+            bg_opa: TRANSP
+            border_width: 0
+            widgets:
+              # Temperature large in the center
+              - label:
+                  id: weather_temp_label
+                  align: CENTER
+                  y: -60
+                  text_font: roboto_96
+                  text_color: 0xFFFFFF
+                  text: "22°"
+              
+              # Weather Condition
+              - label:
+                  id: weather_condition_label
+                  align: CENTER
+                  y: 20
+                  text_font: roboto_32
+                  text_color: 0xFFFFFF
+                  text: "Sunny"
+              
+              # Humidity
+              - label:
+                  id: weather_humidity_label
+                  align: CENTER
+                  y: 60
+                  text_font: roboto_24
+                  text_color: 0xFFFFFF
+                  text: "65%"
+              
+              # Info Text
+              - label:
+                  align: CENTER
+                  y: 180
+                  text_font: roboto_28
+                  text_color: 0xFFFFFF
+                  text: "Tap for Espresso Timer"
+
+        # ============================================
+        # TIMER DISPLAY (when timer is running)
+        # ============================================
+        - obj:
+            id: timer_container
+            x: 0
+            y: 0
+            width: 390
+            height: 450
+            bg_color: 0x000000
+            bg_opa: TRANSP
+            border_width: 0
+            pad_all: 0
+            hidden: true
+            widgets:
+              # Timer Display
+              - label:
+                  id: timer_label
+                  align: CENTER
+                  y: -80
+                  text_font: roboto_96
+                  text_color: 0x00FF00
+                  text: "00.0"
+              
+              # Info "Seconds"
+              - label:
+                  align: CENTER
+                  y: 0
+                  text_font: roboto_24
+                  text_color: 0xFFFFFF
+                  text: "Seconds"
+              
+              # STOP/START Button (Toggle)
+              - button:
+                  id: stop_button
+                  x: 25
+                  y: 312
+                  width: 141
+                  height: 80
+                  bg_color: 0xFF6600
+                  hidden: true
+                  widgets:
+                    - label:
+                        id: stop_button_label
+                        align: CENTER
+                        text_font: roboto_32
+                        text: "STOP"
+                  on_press:
+                    # Ignore presses while the timer is idle or was just started / display just woke up (< 500ms)
+                    - if:
+                        condition:
+                          lambda: |-
+                            if (!id(timer_running)) return false;
+                            unsigned long t = millis();
+                            return !(t - id(timer_start_time) < 500 || t - id(display_wakeup_time) < 500);
+                        then:
+                          - script.execute: toggle_pause_timer
+              
+              # RESET Button
+              - button:
+                  id: reset_button
+                  x: 216
+                  y: 312
+                  width: 141
+                  height: 80
+                  bg_color: 0xFF0000
+                  hidden: true
+                  widgets:
+                    - label:
+                        align: CENTER
+                        text_font: roboto_32
+                        text: "RESET"
+                  on_press:
+                    # Ignore presses while the timer is idle or was just started / display just woke up (< 500ms)
+                    - if:
+                        condition:
+                          lambda: |-
+                            if (!id(timer_running)) return false;
+                            unsigned long t = millis();
+                            return !(t - id(timer_start_time) < 500 || t - id(display_wakeup_time) < 500);
+                        then:
+                          - script.execute: reset_timer
+
+        # ============================================
+        # HEADER (visible in weather and timer view)
+        # Defined last so it is drawn on top of the containers.
+        # Top margin (22px) equals the bottom margin of the info text.
+        # ============================================
+        # Clock top left (hh:mm)
+        - label:
+            id: clock_label
+            align: TOP_LEFT
+            x: 25
+            y: 22
+            text_font: roboto_32
+            text_color: 0xFFFFFF
+            text: "--:--"
+        
+        # Date top right (dd.mm.yyyy)
+        - label:
+            id: date_label
+            align: TOP_RIGHT
+            x: -33
+            y: 22
+            text_font: roboto_32
+            text_color: 0xFFFFFF
+            text: "--.--.----"
+
+# Touch Actions for Main Display (full screen in weather view)
+binary_sensor:
+  - platform: touchscreen
+    id: screen_touch
+    x_min: 0
+    y_min: 0
+    x_max: 390
+    y_max: 450
+    on_press:
+      # Every touch restarts the display auto-off countdown
+      - lambda: |-
+          id(last_activity_time) = millis();
+      - if:
+          condition:
+            lambda: 'return !id(display_is_on);'
+          then:
+            # Display is off: just turn it on, do not start the timer
+            - light.turn_on: display_backlight
+          else:
+            # Start the timer if idle and the display did not just wake up (< 500ms)
+            - if:
+                condition:
+                  lambda: 'return !id(timer_running) && (millis() - id(display_wakeup_time) >= 500);'
+                then:
+                  - script.execute: start_timer
+  
+  # Timer state for Home Assistant (true while the timer is counting)
+  - platform: template
+    id: timer_running_sensor
+    name: "Timer Running"
+    icon: "mdi:timer-outline"
+    lambda: 'return id(timer_running) && !id(timer_paused);'
+
+# Buttons for Home Assistant (e.g. to start/stop the timer from an automation)
+button:
+  - platform: template
+    id: ha_start_timer
+    name: "Start Timer"
+    icon: "mdi:play"
+    on_press:
+      - script.execute: start_timer
+  
+  - platform: template
+    id: ha_stop_timer
+    name: "Stop Timer"
+    icon: "mdi:stop"
+    on_press:
+      - script.execute: stop_timer
+  
+  - platform: template
+    id: ha_reset_timer
+    name: "Reset Timer"
+    icon: "mdi:restart"
+    on_press:
+      - script.execute: reset_timer
+
+# Update Scripts
+script:
+  # Start a new run from 0.0s (ignored while the timer is counting).
+  # Used by touch and by the "Start Timer" button in Home Assistant.
+  # Also wakes the display and switches to the timer view.
+  - id: start_timer
+    then:
+      - if:
+          condition:
+            lambda: 'return !(id(timer_running) && !id(timer_paused));'
+          then:
+            - lambda: |-
+                unsigned long now = millis();
+                id(timer_running) = true;
+                id(timer_paused) = false;
+                id(timer_seconds) = 0.0;
+                id(timer_start_time) = now; // Touch debounce reference
+                id(timer_accum_ms) = 0;
+                id(timer_segment_start) = now;
+                id(last_activity_time) = now;
+                // Reset button to STOP state (in case a previous run was stopped)
+                lv_label_set_text(stop_button_label, "STOP");
+                lv_obj_set_style_bg_color(stop_button, lv_color_hex(0xFF6600), LV_PART_MAIN);
+            - light.turn_on: display_backlight
+            - lvgl.widget.hide: weather_container
+            - lvgl.widget.show: timer_container
+            - lvgl.widget.show: stop_button
+            - lvgl.widget.show: reset_button
+            - script.execute: update_timer_display
+  
+  # Stop (freeze) the timer and publish the shot time to Home Assistant.
+  # Ignored if the timer is not counting.
+  - id: stop_timer
+    then:
+      - if:
+          condition:
+            lambda: 'return id(timer_running) && !id(timer_paused);'
+          then:
+            - lambda: |-
+                // Bank the time of the finished segment (keeps the clock exact)
+                id(timer_accum_ms) += millis() - id(timer_segment_start);
+                id(timer_seconds) = id(timer_accum_ms) / 1000.0f;
+                id(timer_paused) = true;
+                id(last_shot_time).publish_state(id(timer_seconds));
+                lv_label_set_text(stop_button_label, "START");
+                lv_obj_set_style_bg_color(stop_button, lv_color_hex(0x00FF00), LV_PART_MAIN);
+            - script.execute: update_timer_display
+  
+  # Continue a stopped timer (START state of the display button)
+  - id: resume_timer
+    then:
+      - if:
+          condition:
+            lambda: 'return id(timer_running) && id(timer_paused);'
+          then:
+            - lambda: |-
+                id(timer_paused) = false;
+                id(timer_segment_start) = millis();
+                id(last_activity_time) = millis();
+                lv_label_set_text(stop_button_label, "STOP");
+                lv_obj_set_style_bg_color(stop_button, lv_color_hex(0xFF6600), LV_PART_MAIN);
+  
+  # STOP/START toggle of the display button
+  - id: toggle_pause_timer
+    then:
+      - if:
+          condition:
+            lambda: 'return id(timer_paused);'
+          then:
+            - script.execute: resume_timer
+          else:
+            - script.execute: stop_timer
+  
+  # Reset the timer and return to the weather view.
+  # A counting timer is published as shot time before it is reset.
+  - id: reset_timer
+    then:
+      - if:
+          condition:
+            lambda: 'return id(timer_running);'
+          then:
+            - lambda: |-
+                if (!id(timer_paused)) {
+                  float elapsed = (id(timer_accum_ms) + (millis() - id(timer_segment_start))) / 1000.0f;
+                  id(last_shot_time).publish_state(elapsed);
+                }
+                id(timer_running) = false;
+                id(timer_paused) = false;
+                id(timer_seconds) = 0.0;
+                id(timer_start_time) = 0;
+                id(timer_accum_ms) = 0;
+                id(timer_segment_start) = 0;
+                lv_label_set_text(stop_button_label, "STOP");
+                lv_obj_set_style_bg_color(stop_button, lv_color_hex(0xFF6600), LV_PART_MAIN);
+            - lvgl.widget.hide: stop_button
+            - lvgl.widget.hide: reset_button
+            - lvgl.widget.show: weather_container
+            - lvgl.widget.hide: timer_container
+  
+  - id: init_display
+    then:
+      - lambda: |-
+          // Set initial opacity values for containers
+          uint8_t weather_opacity = (uint8_t)(id(weather_bg_opacity).state * 2.55);
+          uint8_t timer_opacity = (uint8_t)(id(timer_bg_opacity).state * 2.55);
+          lv_obj_set_style_bg_opa(weather_container, weather_opacity, LV_PART_MAIN);
+          lv_obj_set_style_bg_opa(timer_container, timer_opacity, LV_PART_MAIN);
+  
+  - id: update_weather
+    then:
+      - logger.log:
+          format: "Updating weather display - Temp: %.1f, Humidity: %.0f, Condition: %s"
+          args: ['id(outdoor_temperature).state', 'id(outdoor_humidity).state', 'id(weather_condition).state.c_str()']
+          level: INFO
+      - lvgl.label.update:
+          id: weather_temp_label
+          text: !lambda |-
+            static char temp_str[10];
+            snprintf(temp_str, sizeof(temp_str), "%.0f°", id(outdoor_temperature).state);
+            return temp_str;
+      - lvgl.label.update:
+          id: weather_condition_label
+          text: !lambda 'return id(weather_condition).state.c_str();'
+      - lvgl.label.update:
+          id: weather_humidity_label
+          text: !lambda |-
+            static char hum_str[20];
+            snprintf(hum_str, sizeof(hum_str), "%.0f%%", id(outdoor_humidity).state);
+            return hum_str;
+  
+  # Update clock (hh:mm) and date (dd.mm.yyyy) in the header
+  - id: update_clock
+    then:
+      - lvgl.label.update:
+          id: clock_label
+          text: !lambda |-
+            static char clock_str[8];
+            auto now = id(esptime).now();
+            if (!now.is_valid()) {
+              return "--:--";
+            }
+            snprintf(clock_str, sizeof(clock_str), "%02d:%02d", now.hour, now.minute);
+            return clock_str;
+      - lvgl.label.update:
+          id: date_label
+          text: !lambda |-
+            static char date_str[16];
+            auto now = id(esptime).now();
+            if (!now.is_valid()) {
+              return "--.--.----";
+            }
+            snprintf(date_str, sizeof(date_str), "%02d.%02d.%04d", now.day_of_month, now.month, now.year);
+            return date_str;
+  
+  - id: update_timer_display
+    then:
+      - lvgl.label.update:
+          id: timer_label
+          text: !lambda |-
+            static char time_str[10];
+            snprintf(time_str, sizeof(time_str), "%.1f", id(timer_seconds));
+            return time_str;
+      - lambda: |-
+          // Configurable thresholds from Home Assistant
+          float perfect_time = id(perfect_shot_time).state;
+          float max_time = id(max_shot_time).state;
+          
+          // Color transition: Green -> Yellow -> Red between perfect_time and max_time
+          uint8_t red, green, blue;
+          if (id(timer_seconds) < perfect_time) {
+            red = 0; green = 255; blue = 0; // Green (perfect)
+          } else if (id(timer_seconds) < max_time) {
+            // Interpolation from Green (0x00FF00) to Red (0xFF0000)
+            float range = max_time - perfect_time;
+            float progress = (id(timer_seconds) - perfect_time) / range;
+            green = 255 * (1.0 - progress);
+            red = 255;
+            blue = 0;
+          } else {
+            red = 255; green = 0; blue = 0; // Red (too long)
+          }
+          
+          // Set LVGL color with native API
+          lv_color_t color = lv_color_make(red, green, blue);
+          lv_obj_set_style_text_color(timer_label, color, LV_PART_MAIN);
+
+# Fonts
+font:
+  - file: "gfonts://Roboto"
+    id: roboto_24
+    size: 24
+  
+  - file: "gfonts://Roboto"
+    id: roboto_28
+    size: 28
+    bpp: 4
+  
+  - file: "gfonts://Roboto"
+    id: roboto_32
+    size: 32
+    bpp: 4
+  
+  - file: "gfonts://Roboto"
+    id: roboto_96
+    size: 96
+    bpp: 4
+
+# Home Assistant Time (clock and date in the display header)
+# Timezone and DST come from Home Assistant.
+time:
+  - platform: homeassistant
+    id: esptime
+    on_time_sync:
+      - script.execute: update_clock
+    on_time:
+      # Every full minute
+      - seconds: 0
+        minutes: /1
+        then:
+          - script.execute: update_clock
