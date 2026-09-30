@@ -80,7 +80,7 @@ ota_password: "ChooseAnOtaPassword"
 ap_password: "ChooseAnApPassword"          # min. 8 characters
 ```
 
-**Note:** `secrets.yaml` is listed in `.gitignore` and is not committed. Never share this file.
+**Note:** Never commit or share your `secrets.yaml`, it contains your WiFi password and API key.
 
 ### 2. Home Assistant Sensors
 
