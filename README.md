@@ -1,5 +1,12 @@
 # Espresso Shot Timer for Rocket Appartamento
 
+[![ESPHome](https://img.shields.io/badge/ESPHome-2026.9.0%2B-000000?style=for-the-badge&logo=esphome&logoColor=white)](https://esphome.io/)
+[![Home Assistant](https://img.shields.io/badge/Home_Assistant-Integration-18BCF2?style=for-the-badge&logo=homeassistant&logoColor=white)](https://www.home-assistant.io/)
+[![ESP32-S3](https://img.shields.io/badge/ESP32--S3-AMOLED_1.8%22_Touch-E7352C?style=for-the-badge&logo=espressif&logoColor=white)](https://www.espressif.com/en/products/socs/esp32-s3)
+[![LVGL](https://img.shields.io/badge/LVGL-UI-0080FF?style=for-the-badge)](https://lvgl.io/)
+[![HA Community](https://img.shields.io/badge/HA_Community-Discussion-41BDF5?style=for-the-badge&logo=homeassistant&logoColor=white)](https://community.home-assistant.io/t/espresso-shot-timer-for-the-rocket-appartamento-esphome-lvgl-waveshare-1-8-amoled/1026888)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=for-the-badge)](LICENSE)
+
 An ESPHome-based timer for perfect espresso extraction with the Waveshare ESP32-S3 1.8" AMOLED Touch Display.
 
 Discussion and questions: [Home Assistant Community thread](https://community.home-assistant.io/t/espresso-shot-timer-for-the-rocket-appartamento-esphome-lvgl-waveshare-1-8-amoled/1026888)
